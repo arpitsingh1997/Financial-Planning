@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  type OneTimeExpense,
   type PlanInputs,
   projectNetWorth,
   savingsRate,
@@ -13,14 +14,53 @@ const defaultPlan: PlanInputs = {
   netWorth: 125000,
   annualIncome: 95000,
   annualSavings: 18000,
-  investmentReturn: 0.06,
+  returnNow: 0.06,
+  returnAtRetirement: 0.04,
+  oneTimeExpenses: [],
 };
+
+function normalizeExpenses(raw: unknown): OneTimeExpense[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OneTimeExpense[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const age = Number(o.age);
+    const amount = Number(o.amount);
+    if (!Number.isFinite(age) || !Number.isFinite(amount)) continue;
+    const id =
+      typeof o.id === "string" && o.id.length > 0
+        ? o.id
+        : globalThis.crypto?.randomUUID?.() ?? `e-${out.length}`;
+    out.push({
+      id,
+      age: Math.floor(age),
+      amount: Math.max(0, amount),
+    });
+  }
+  return out;
+}
 
 function loadPlan(): PlanInputs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultPlan;
-    const p = JSON.parse(raw) as Partial<PlanInputs>;
+    const p = JSON.parse(raw) as Partial<PlanInputs> & {
+      investmentReturn?: number;
+    };
+    const legacy =
+      typeof p.investmentReturn === "number" && Number.isFinite(p.investmentReturn)
+        ? p.investmentReturn
+        : undefined;
+    const returnNow =
+      typeof p.returnNow === "number" && Number.isFinite(p.returnNow)
+        ? p.returnNow
+        : legacy ?? defaultPlan.returnNow;
+    const returnAtRetirement =
+      typeof p.returnAtRetirement === "number" &&
+      Number.isFinite(p.returnAtRetirement)
+        ? p.returnAtRetirement
+        : legacy ?? defaultPlan.returnAtRetirement;
     return {
       age: typeof p.age === "number" ? p.age : defaultPlan.age,
       retirementAge:
@@ -37,21 +77,30 @@ function loadPlan(): PlanInputs {
         typeof p.annualSavings === "number"
           ? p.annualSavings
           : defaultPlan.annualSavings,
-      investmentReturn:
-        typeof p.investmentReturn === "number"
-          ? p.investmentReturn
-          : defaultPlan.investmentReturn,
+      returnNow,
+      returnAtRetirement,
+      oneTimeExpenses: normalizeExpenses(
+        (p as { oneTimeExpenses?: unknown }).oneTimeExpenses
+      ),
     };
   } catch {
     return defaultPlan;
   }
 }
 
-const currency = new Intl.NumberFormat(undefined, {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+/** 1 crore = ₹1,00,00,000 */
+function formatCrores(rupees: number): string {
+  if (!Number.isFinite(rupees)) return "—";
+  const cr = rupees / 1e7;
+  const abs = Math.abs(cr);
+  const maxFrac =
+    abs === 0 ? 0 : abs < 0.001 ? 6 : abs < 0.01 ? 4 : abs < 1 ? 3 : 2;
+  const n = new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFrac,
+  }).format(cr);
+  return `₹${n} Cr`;
+}
 
 const pct = new Intl.NumberFormat(undefined, {
   style: "percent",
@@ -117,7 +166,7 @@ export default function App() {
   }, [plan]);
 
   const rows = useMemo(() => projectNetWorth(plan), [plan]);
-  const nwSeries = useMemo(() => rows.map((r) => r.netWorth), [rows]);
+  const nwSeries = useMemo(() => rows.map((r) => r.endingAssets), [rows]);
   const end = rows[rows.length - 1];
   const sr = savingsRate(plan.annualIncome, plan.annualSavings);
 
@@ -126,13 +175,51 @@ export default function App() {
     (value: PlanInputs[K]) =>
       setPlan((p) => ({ ...p, [key]: value }));
 
+  const addOneTimeExpense = () => {
+    setPlan((p) => ({
+      ...p,
+      oneTimeExpenses: [
+        ...p.oneTimeExpenses,
+        {
+          id: crypto.randomUUID(),
+          age: Math.min(p.retirementAge, p.age + 5),
+          amount: 0,
+        },
+      ],
+    }));
+  };
+
+  const updateOneTimeExpense = (
+    id: string,
+    patch: Partial<Pick<OneTimeExpense, "age" | "amount">>
+  ) => {
+    setPlan((p) => ({
+      ...p,
+      oneTimeExpenses: p.oneTimeExpenses.map((e) =>
+        e.id === id ? { ...e, ...patch } : e
+      ),
+    }));
+  };
+
+  const removeOneTimeExpense = (id: string) => {
+    setPlan((p) => ({
+      ...p,
+      oneTimeExpenses: p.oneTimeExpenses.filter((e) => e.id !== id),
+    }));
+  };
+
+  const startBalance = rows[0]?.startingAssets ?? plan.netWorth;
+  const endBalance = end?.endingAssets ?? 0;
+
   return (
     <div className="app">
       <header className="app-header">
         <h1>Financial planning</h1>
         <p>
-          Track net worth by age, income, savings, and expected investment
-          return. Numbers stay in this browser only.
+          Track net worth by age, income, savings, one-time expenses at chosen
+          ages, and expected returns (linear from now to retirement). Summary and
+          projections are in ₹
+          crore; enter money fields in rupees. Numbers stay in this browser only.
         </p>
       </header>
 
@@ -224,37 +311,124 @@ export default function App() {
             </div>
           </div>
           <div className="field">
-            <label htmlFor="ret">Expected yearly investment return</label>
+            <label htmlFor="ret-now">Annual return now (at current age)</label>
             <input
-              id="ret"
+              id="ret-now"
               type="number"
               min={-20}
               max={30}
               step={0.5}
-              value={Math.round(plan.investmentReturn * 1000) / 10}
+              value={Math.round(plan.returnNow * 1000) / 10}
               onChange={(e) => {
-                const v = parseNum(e.target.value, plan.investmentReturn * 100);
-                set("investmentReturn")(v / 100);
+                const v = parseNum(e.target.value, plan.returnNow * 100);
+                set("returnNow")(v / 100);
               }}
             />
-            <div className="field-hint">Enter as percent (e.g. 6 for 6%).</div>
+          </div>
+          <div className="field">
+            <label htmlFor="ret-retire">
+              Annual return at retirement (target age)
+            </label>
+            <input
+              id="ret-retire"
+              type="number"
+              min={-20}
+              max={30}
+              step={0.5}
+              value={Math.round(plan.returnAtRetirement * 1000) / 10}
+              onChange={(e) => {
+                const v = parseNum(
+                  e.target.value,
+                  plan.returnAtRetirement * 100
+                );
+                set("returnAtRetirement")(v / 100);
+              }}
+            />
+            <div className="field-hint">
+              Enter each as percent (e.g. 6 for 6%). The model uses a straight
+              line between “now” and “at retirement” by year.
+            </div>
           </div>
         </section>
       </div>
 
       <section className="card" style={{ marginTop: "1rem" }}>
-        <h2>Net worth snapshot</h2>
+        <h2>One-time expenses</h2>
+        <div className="expense-toolbar">
+          <p>
+            Deducted once at the start of the age you pick (wedding, home
+            down-payment, etc.). Amounts in rupees; projection table shows
+            when they hit.
+          </p>
+          <button type="button" className="btn btn-primary" onClick={addOneTimeExpense}>
+            Add expense
+          </button>
+        </div>
+        {plan.oneTimeExpenses.length === 0 ? (
+          <p className="expense-empty">No one-time expenses yet.</p>
+        ) : (
+          <div className="expense-list">
+            {plan.oneTimeExpenses.map((e) => (
+              <div key={e.id} className="expense-row">
+                <div className="field">
+                  <label htmlFor={`ex-age-${e.id}`}>Age</label>
+                  <input
+                    id={`ex-age-${e.id}`}
+                    type="number"
+                    min={0}
+                    max={120}
+                    step={1}
+                    value={e.age}
+                    onChange={(ev) =>
+                      updateOneTimeExpense(e.id, {
+                        age: parseNum(ev.target.value, e.age),
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor={`ex-amt-${e.id}`}>Amount (₹)</label>
+                  <input
+                    id={`ex-amt-${e.id}`}
+                    type="number"
+                    min={0}
+                    step={10000}
+                    value={e.amount}
+                    onChange={(ev) =>
+                      updateOneTimeExpense(e.id, {
+                        amount: parseNum(ev.target.value, e.amount),
+                      })
+                    }
+                  />
+                </div>
+                <div className="field-remove">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => removeOneTimeExpense(e.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="card" style={{ marginTop: "1rem" }}>
+        <h2>Year-by-year breakdown</h2>
         <div className="stats">
           <div className="stat">
-            <div className="label">Today (age {plan.age})</div>
+            <div className="label">Start (age {plan.age})</div>
             <div className="value accent mono">
-              {currency.format(plan.netWorth)}
+              {formatCrores(startBalance)}
             </div>
           </div>
           <div className="stat">
-            <div className="label">At age {end?.age ?? plan.retirementAge}</div>
+            <div className="label">End of plan (age {end?.age ?? plan.retirementAge})</div>
             <div className="value accent mono">
-              {currency.format(end?.netWorth ?? 0)}
+              {formatCrores(endBalance)}
             </div>
           </div>
           <div className="stat">
@@ -264,9 +438,10 @@ export default function App() {
             </div>
           </div>
           <div className="stat">
-            <div className="label">Return assumption</div>
-            <div className="value mono">
-              {pct.format(plan.investmentReturn)}
+            <div className="label">Return path (linear)</div>
+            <div className="value mono" style={{ fontSize: "0.95rem" }}>
+              {pct.format(plan.returnNow)} →{" "}
+              {pct.format(plan.returnAtRetirement)}
             </div>
           </div>
         </div>
@@ -281,15 +456,36 @@ export default function App() {
               <tr>
                 <th>Age</th>
                 <th>Year</th>
-                <th>Projected net worth</th>
+                <th title="Interpolated annual return this year">Return</th>
+                <th title="Balance at start of year, before one-time expenses">
+                  Starting (₹ Cr)
+                </th>
+                <th title="Contributions added at end of year">Savings (₹ Cr)</th>
+                <th title="Return on balance after one-time expenses (rate × balance)">
+                  Growth (₹ Cr)
+                </th>
+                <th title="One-time expenses deducted at start of year">
+                  One-time (₹ Cr)
+                </th>
+                <th title="Balance after growth and savings">Ending (₹ Cr)</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r.age}>
+                <tr
+                  key={r.age}
+                  className={r.oneTimeExpense > 0 ? "row-expense" : undefined}
+                >
                   <td>{r.age}</td>
                   <td className="mono">+{i}</td>
-                  <td className="mono">{currency.format(r.netWorth)}</td>
+                  <td className="mono">{pct.format(r.annualReturnRate)}</td>
+                  <td className="mono">{formatCrores(r.startingAssets)}</td>
+                  <td className="mono">{formatCrores(r.yearlySavings)}</td>
+                  <td className="mono">{formatCrores(r.portfolioGrowth)}</td>
+                  <td className="mono">
+                    {r.oneTimeExpense > 0 ? formatCrores(r.oneTimeExpense) : "—"}
+                  </td>
+                  <td className="mono">{formatCrores(r.endingAssets)}</td>
                 </tr>
               ))}
             </tbody>
@@ -298,9 +494,11 @@ export default function App() {
       </section>
 
       <p className="footer-note">
-        Model: each year, balance compounds at your return rate, then your
-        annual savings are added. Not tax or inflation advice—adjust return to
-        approximate real after-inflation returns if you like.
+        Model each year: starting assets → less one-time expenses → balance
+        earns that year’s return (linearly interpolated between your “now” and
+        “at retirement” rates) → add yearly savings → ending assets (carried
+        forward). Not tax or inflation advice—use real after-inflation returns
+        if you like.
       </p>
     </div>
   );
