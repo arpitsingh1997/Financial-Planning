@@ -11,6 +11,10 @@ export type PlanInputs = {
   netWorth: number;
   annualIncome: number;
   annualSavings: number;
+  /** Year-over-year income growth (decimal, e.g. 0.05 for 5%). */
+  annualIncomeIncrease: number;
+  /** Year-over-year savings contribution growth (decimal). */
+  annualSavingsIncrease: number;
   /** Expected annual return at current age (decimal, e.g. 0.06 for 6%). */
   returnNow: number;
   /** Expected annual return at retirement age; linearly interpolated in between. */
@@ -21,6 +25,8 @@ export type PlanInputs = {
 export type YearProjection = {
   age: number;
   yearIndex: number;
+  /** After-tax income for this plan year (grows by annualIncomeIncrease). */
+  yearlyIncome: number;
   /** Balance at start of this age year, before one-time expenses. */
   startingAssets: number;
   yearlySavings: number;
@@ -63,6 +69,8 @@ function returnForYear(
 /**
  * Each age year: start with prior ending balance, subtract one-times, apply
  * that year’s return (linear from returnNow to returnAtRetirement), add savings.
+ * Income and savings amounts grow by annualIncomeIncrease / annualSavingsIncrease
+ * each year (first year uses entered amounts).
  */
 export function projectNetWorth(inputs: PlanInputs): YearProjection[] {
   const age = Math.floor(clamp(inputs.age, 0, 120));
@@ -70,13 +78,18 @@ export function projectNetWorth(inputs: PlanInputs): YearProjection[] {
   const rNow = clamp(inputs.returnNow, -0.5, 0.5);
   const rRet = clamp(inputs.returnAtRetirement, -0.5, 0.5);
   const spanYears = retire - age;
-  const yearlySavings = Math.max(0, inputs.annualSavings);
+  const gInc = clamp(inputs.annualIncomeIncrease, -0.5, 0.5);
+  const gSav = clamp(inputs.annualSavingsIncrease, -0.5, 0.5);
+  const baseIncome = Math.max(0, inputs.annualIncome);
+  const baseSavings = Math.max(0, inputs.annualSavings);
   let nw = Math.max(0, inputs.netWorth);
 
   const rows: YearProjection[] = [];
   for (let a = age; a <= retire; a++) {
     const yearIndex = a - age;
     const r = clamp(returnForYear(yearIndex, spanYears, rNow, rRet), -0.5, 0.5);
+    const yearlyIncome = baseIncome * Math.pow(1 + gInc, yearIndex);
+    const yearlySavings = baseSavings * Math.pow(1 + gSav, yearIndex);
     const startingAssets = nw;
     const oneTimeExpense = expenseTotalAtAge(inputs.oneTimeExpenses, a);
     const afterOneTime = Math.max(0, startingAssets - oneTimeExpense);
@@ -86,6 +99,7 @@ export function projectNetWorth(inputs: PlanInputs): YearProjection[] {
     rows.push({
       age: a,
       yearIndex,
+      yearlyIncome,
       startingAssets,
       yearlySavings,
       portfolioGrowth,

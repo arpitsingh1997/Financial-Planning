@@ -50,8 +50,17 @@ a {
   margin-bottom: 2rem;
 }
 
+.app-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.35rem;
+}
+
 .app-header h1 {
-  margin: 0 0 0.35rem;
+  margin: 0;
   font-size: clamp(1.6rem, 4vw, 2rem);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -97,6 +106,33 @@ a {
 
 .field:last-child {
   margin-bottom: 0;
+}
+
+.field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.field-pair .field {
+  margin-bottom: 0;
+}
+
+.field-pair input {
+  width: 100%;
+}
+
+.field-pair-footnote {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+@media (max-width: 520px) {
+  .field-pair {
+    grid-template-columns: 1fr;
+  }
 }
 
 .field label {

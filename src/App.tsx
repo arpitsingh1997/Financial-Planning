@@ -8,14 +8,18 @@ import {
 
 const STORAGE_KEY = "financial-planning-plan-v1";
 
+const RUPEES_PER_CRORE = 1e7;
+
 const defaultPlan: PlanInputs = {
-  age: 32,
-  retirementAge: 65,
-  netWorth: 125000,
-  annualIncome: 95000,
-  annualSavings: 18000,
-  returnNow: 0.06,
-  returnAtRetirement: 0.04,
+  age: 30,
+  retirementAge: 60,
+  netWorth: 5_00_00_000,
+  annualIncome: 80_00_000,
+  annualSavings: 40_00_000,
+  annualIncomeIncrease: 0.05,
+  annualSavingsIncrease: 0.05,
+  returnNow: 0.12,
+  returnAtRetirement: 0.06,
   oneTimeExpenses: [],
 };
 
@@ -31,7 +35,7 @@ function normalizeExpenses(raw: unknown): OneTimeExpense[] {
     const id =
       typeof o.id === "string" && o.id.length > 0
         ? o.id
-        : globalThis.crypto?.randomUUID?.() ?? `e-${out.length}`;
+        : (globalThis.crypto?.randomUUID?.() ?? `e-${out.length}`);
     out.push({
       id,
       age: Math.floor(age),
@@ -49,18 +53,19 @@ function loadPlan(): PlanInputs {
       investmentReturn?: number;
     };
     const legacy =
-      typeof p.investmentReturn === "number" && Number.isFinite(p.investmentReturn)
+      typeof p.investmentReturn === "number" &&
+      Number.isFinite(p.investmentReturn)
         ? p.investmentReturn
         : undefined;
     const returnNow =
       typeof p.returnNow === "number" && Number.isFinite(p.returnNow)
         ? p.returnNow
-        : legacy ?? defaultPlan.returnNow;
+        : (legacy ?? defaultPlan.returnNow);
     const returnAtRetirement =
       typeof p.returnAtRetirement === "number" &&
       Number.isFinite(p.returnAtRetirement)
         ? p.returnAtRetirement
-        : legacy ?? defaultPlan.returnAtRetirement;
+        : (legacy ?? defaultPlan.returnAtRetirement);
     return {
       age: typeof p.age === "number" ? p.age : defaultPlan.age,
       retirementAge:
@@ -77,10 +82,20 @@ function loadPlan(): PlanInputs {
         typeof p.annualSavings === "number"
           ? p.annualSavings
           : defaultPlan.annualSavings,
+      annualIncomeIncrease:
+        typeof p.annualIncomeIncrease === "number" &&
+        Number.isFinite(p.annualIncomeIncrease)
+          ? p.annualIncomeIncrease
+          : defaultPlan.annualIncomeIncrease,
+      annualSavingsIncrease:
+        typeof p.annualSavingsIncrease === "number" &&
+        Number.isFinite(p.annualSavingsIncrease)
+          ? p.annualSavingsIncrease
+          : defaultPlan.annualSavingsIncrease,
       returnNow,
       returnAtRetirement,
       oneTimeExpenses: normalizeExpenses(
-        (p as { oneTimeExpenses?: unknown }).oneTimeExpenses
+        (p as { oneTimeExpenses?: unknown }).oneTimeExpenses,
       ),
     };
   } catch {
@@ -91,7 +106,7 @@ function loadPlan(): PlanInputs {
 /** 1 crore = ₹1,00,00,000 */
 function formatCrores(rupees: number): string {
   if (!Number.isFinite(rupees)) return "—";
-  const cr = rupees / 1e7;
+  const cr = rupees / RUPEES_PER_CRORE;
   const abs = Math.abs(cr);
   const maxFrac =
     abs === 0 ? 0 : abs < 0.001 ? 6 : abs < 0.01 ? 4 : abs < 1 ? 3 : 2;
@@ -100,6 +115,22 @@ function formatCrores(rupees: number): string {
     maximumFractionDigits: maxFrac,
   }).format(cr);
   return `₹${n} Cr`;
+}
+
+/** Table money columns: always one decimal place. */
+function formatCroresTable(rupees: number): string {
+  if (!Number.isFinite(rupees)) return "—";
+  const cr = rupees / RUPEES_PER_CRORE;
+  const n = new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(cr);
+  return `₹${n} Cr`;
+}
+
+function rupeesFromCroreField(cr: number): number {
+  if (!Number.isFinite(cr) || cr < 0) return 0;
+  return cr * RUPEES_PER_CRORE;
 }
 
 const pct = new Intl.NumberFormat(undefined, {
@@ -158,7 +189,7 @@ function parseNum(s: string, fallback: number): number {
 
 export default function App() {
   const [plan, setPlan] = useState<PlanInputs>(() =>
-    typeof window === "undefined" ? defaultPlan : loadPlan()
+    typeof window === "undefined" ? defaultPlan : loadPlan(),
   );
 
   useEffect(() => {
@@ -191,12 +222,12 @@ export default function App() {
 
   const updateOneTimeExpense = (
     id: string,
-    patch: Partial<Pick<OneTimeExpense, "age" | "amount">>
+    patch: Partial<Pick<OneTimeExpense, "age" | "amount">>,
   ) => {
     setPlan((p) => ({
       ...p,
       oneTimeExpenses: p.oneTimeExpenses.map((e) =>
-        e.id === id ? { ...e, ...patch } : e
+        e.id === id ? { ...e, ...patch } : e,
       ),
     }));
   };
@@ -208,18 +239,34 @@ export default function App() {
     }));
   };
 
+  const resetToDefault = () => {
+    setPlan({
+      ...defaultPlan,
+      oneTimeExpenses: [],
+    });
+  };
+
   const startBalance = rows[0]?.startingAssets ?? plan.netWorth;
   const endBalance = end?.endingAssets ?? 0;
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Financial planning</h1>
+        <div className="app-header-row">
+          <h1>Financial planning</h1>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={resetToDefault}
+          >
+            Reset to default
+          </button>
+        </div>
         <p>
           Track net worth by age, income, savings, one-time expenses at chosen
-          ages, and expected returns (linear from now to retirement). Summary and
-          projections are in ₹
-          crore; enter money fields in rupees. Numbers stay in this browser only.
+          ages, and expected returns (linear from now to retirement). Net worth,
+          income, and yearly savings are entered in ₹ crore; one-time expenses
+          stay in rupees. Numbers stay in this browser only.
         </p>
       </header>
 
@@ -235,9 +282,7 @@ export default function App() {
               max={100}
               step={1}
               value={plan.age}
-              onChange={(e) =>
-                set("age")(parseNum(e.target.value, plan.age))
-              }
+              onChange={(e) => set("age")(parseNum(e.target.value, plan.age))}
             />
           </div>
           <div className="field">
@@ -251,7 +296,7 @@ export default function App() {
               value={plan.retirementAge}
               onChange={(e) =>
                 set("retirementAge")(
-                  parseNum(e.target.value, plan.retirementAge)
+                  parseNum(e.target.value, plan.retirementAge),
                 )
               }
             />
@@ -261,15 +306,19 @@ export default function App() {
             </div>
           </div>
           <div className="field">
-            <label htmlFor="nw">Current net worth</label>
+            <label htmlFor="nw">Current net worth (₹ Cr)</label>
             <input
               id="nw"
               type="number"
               min={0}
-              step={1000}
-              value={plan.netWorth}
+              step={0.1}
+              value={plan.netWorth / RUPEES_PER_CRORE}
               onChange={(e) =>
-                set("netWorth")(parseNum(e.target.value, plan.netWorth))
+                set("netWorth")(
+                  rupeesFromCroreField(
+                    parseNum(e.target.value, plan.netWorth / RUPEES_PER_CRORE),
+                  ),
+                )
               }
             />
           </div>
@@ -277,76 +326,132 @@ export default function App() {
 
         <section className="card">
           <h2>Cash flow &amp; returns</h2>
-          <div className="field">
-            <label htmlFor="income">Yearly income (after tax)</label>
-            <input
-              id="income"
-              type="number"
-              min={0}
-              step={1000}
-              value={plan.annualIncome}
-              onChange={(e) =>
-                set("annualIncome")(
-                  parseNum(e.target.value, plan.annualIncome)
-                )
-              }
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="save">Yearly savings / investments</label>
-            <input
-              id="save"
-              type="number"
-              min={0}
-              step={500}
-              value={plan.annualSavings}
-              onChange={(e) =>
-                set("annualSavings")(
-                  parseNum(e.target.value, plan.annualSavings)
-                )
-              }
-            />
-            <div className="field-hint">
-              Amount you add to investments each year (401k, brokerage, etc.).
+          <div className="field-pair">
+            <div className="field">
+              <label htmlFor="income">Yearly income (after tax) (₹ Cr)</label>
+              <input
+                id="income"
+                type="number"
+                min={0}
+                step={0.1}
+                value={plan.annualIncome / RUPEES_PER_CRORE}
+                onChange={(e) =>
+                  set("annualIncome")(
+                    rupeesFromCroreField(
+                      parseNum(
+                        e.target.value,
+                        plan.annualIncome / RUPEES_PER_CRORE,
+                      ),
+                    ),
+                  )
+                }
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="inc-growth">
+                Annual income increase (%)
+              </label>
+              <input
+                id="inc-growth"
+                type="number"
+                min={-50}
+                max={50}
+                step={0.5}
+                value={Math.round(plan.annualIncomeIncrease * 1000) / 10}
+                onChange={(e) => {
+                  const v = parseNum(
+                    e.target.value,
+                    plan.annualIncomeIncrease * 100,
+                  );
+                  set("annualIncomeIncrease")(v / 100);
+                }}
+              />
             </div>
           </div>
-          <div className="field">
-            <label htmlFor="ret-now">Annual return now (at current age)</label>
-            <input
-              id="ret-now"
-              type="number"
-              min={-20}
-              max={30}
-              step={0.5}
-              value={Math.round(plan.returnNow * 1000) / 10}
-              onChange={(e) => {
-                const v = parseNum(e.target.value, plan.returnNow * 100);
-                set("returnNow")(v / 100);
-              }}
-            />
+          <div className="field-pair">
+            <div className="field">
+              <label htmlFor="save">Yearly savings / investments (₹ Cr)</label>
+              <input
+                id="save"
+                type="number"
+                min={0}
+                step={0.1}
+                value={plan.annualSavings / RUPEES_PER_CRORE}
+                onChange={(e) =>
+                  set("annualSavings")(
+                    rupeesFromCroreField(
+                      parseNum(
+                        e.target.value,
+                        plan.annualSavings / RUPEES_PER_CRORE,
+                      ),
+                    ),
+                  )
+                }
+              />
+              <div className="field-hint">
+                Amount you add to investments each year (401k, brokerage,
+                etc.).
+              </div>
+            </div>
+            <div className="field">
+              <label htmlFor="sav-growth">
+                Annual savings increase (%)
+              </label>
+              <input
+                id="sav-growth"
+                type="number"
+                min={-50}
+                max={50}
+                step={0.5}
+                value={Math.round(plan.annualSavingsIncrease * 1000) / 10}
+                onChange={(e) => {
+                  const v = parseNum(
+                    e.target.value,
+                    plan.annualSavingsIncrease * 100,
+                  );
+                  set("annualSavingsIncrease")(v / 100);
+                }}
+              />
+            </div>
           </div>
-          <div className="field">
-            <label htmlFor="ret-retire">
-              Annual return at retirement (target age)
-            </label>
-            <input
-              id="ret-retire"
-              type="number"
-              min={-20}
-              max={30}
-              step={0.5}
-              value={Math.round(plan.returnAtRetirement * 1000) / 10}
-              onChange={(e) => {
-                const v = parseNum(
-                  e.target.value,
-                  plan.returnAtRetirement * 100
-                );
-                set("returnAtRetirement")(v / 100);
-              }}
-            />
-            <div className="field-hint">
-              Enter each as percent (e.g. 6 for 6%). The model uses a straight
-              line between “now” and “at retirement” by year.
+          <div className="field-pair">
+            <div className="field">
+              <label htmlFor="ret-now">Annual return now (at current age)</label>
+              <input
+                id="ret-now"
+                type="number"
+                min={-20}
+                max={30}
+                step={0.5}
+                value={Math.round(plan.returnNow * 1000) / 10}
+                onChange={(e) => {
+                  const v = parseNum(e.target.value, plan.returnNow * 100);
+                  set("returnNow")(v / 100);
+                }}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="ret-retire">
+                Annual return at retirement age
+              </label>
+              <input
+                id="ret-retire"
+                type="number"
+                min={-20}
+                max={30}
+                step={0.5}
+                value={Math.round(plan.returnAtRetirement * 1000) / 10}
+                onChange={(e) => {
+                  const v = parseNum(
+                    e.target.value,
+                    plan.returnAtRetirement * 100,
+                  );
+                  set("returnAtRetirement")(v / 100);
+                }}
+              />
+            </div>
+            <div className="field-hint field-pair-footnote">
+              Enter each as percent (e.g. 6 for 6%). Linear approximation between now and retirement is assumed.
             </div>
           </div>
         </section>
@@ -357,10 +462,14 @@ export default function App() {
         <div className="expense-toolbar">
           <p>
             Deducted once at the start of the age you pick (wedding, home
-            down-payment, etc.). Amounts in rupees; projection table shows
-            when they hit.
+            down-payment, etc.). Amounts in rupees; projection table shows when
+            they hit.
           </p>
-          <button type="button" className="btn btn-primary" onClick={addOneTimeExpense}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={addOneTimeExpense}
+          >
             Add expense
           </button>
         </div>
@@ -426,10 +535,10 @@ export default function App() {
             </div>
           </div>
           <div className="stat">
-            <div className="label">End of plan (age {end?.age ?? plan.retirementAge})</div>
-            <div className="value accent mono">
-              {formatCrores(endBalance)}
+            <div className="label">
+              End of plan (age {end?.age ?? plan.retirementAge})
             </div>
+            <div className="value accent mono">{formatCrores(endBalance)}</div>
           </div>
           <div className="stat">
             <div className="label">Savings rate</div>
@@ -457,10 +566,15 @@ export default function App() {
                 <th>Age</th>
                 <th>Year</th>
                 <th title="Interpolated annual return this year">Return</th>
+                <th title="After-tax income for this plan year">
+                  Income (₹ Cr)
+                </th>
                 <th title="Balance at start of year, before one-time expenses">
                   Starting (₹ Cr)
                 </th>
-                <th title="Contributions added at end of year">Savings (₹ Cr)</th>
+                <th title="Contributions added at end of year">
+                  Savings (₹ Cr)
+                </th>
                 <th title="Return on balance after one-time expenses (rate × balance)">
                   Growth (₹ Cr)
                 </th>
@@ -479,13 +593,20 @@ export default function App() {
                   <td>{r.age}</td>
                   <td className="mono">+{i}</td>
                   <td className="mono">{pct.format(r.annualReturnRate)}</td>
-                  <td className="mono">{formatCrores(r.startingAssets)}</td>
-                  <td className="mono">{formatCrores(r.yearlySavings)}</td>
-                  <td className="mono">{formatCrores(r.portfolioGrowth)}</td>
+                  <td className="mono">{formatCroresTable(r.yearlyIncome)}</td>
                   <td className="mono">
-                    {r.oneTimeExpense > 0 ? formatCrores(r.oneTimeExpense) : "—"}
+                    {formatCroresTable(r.startingAssets)}
                   </td>
-                  <td className="mono">{formatCrores(r.endingAssets)}</td>
+                  <td className="mono">{formatCroresTable(r.yearlySavings)}</td>
+                  <td className="mono">
+                    {formatCroresTable(r.portfolioGrowth)}
+                  </td>
+                  <td className="mono">
+                    {r.oneTimeExpense > 0
+                      ? formatCroresTable(r.oneTimeExpense)
+                      : "—"}
+                  </td>
+                  <td className="mono">{formatCroresTable(r.endingAssets)}</td>
                 </tr>
               ))}
             </tbody>
@@ -496,9 +617,11 @@ export default function App() {
       <p className="footer-note">
         Model each year: starting assets → less one-time expenses → balance
         earns that year’s return (linearly interpolated between your “now” and
-        “at retirement” rates) → add yearly savings → ending assets (carried
-        forward). Not tax or inflation advice—use real after-inflation returns
-        if you like.
+        “at retirement” rates) → add yearly savings (growing by your savings
+        increase) → ending assets (carried forward). Income grows by your income
+        increase each year for the table; it does not flow into the balance
+        except via savings. Not tax or inflation advice—use real after-inflation
+        returns if you like.
       </p>
     </div>
   );
