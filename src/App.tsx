@@ -564,7 +564,6 @@ export default function App() {
             <thead>
               <tr>
                 <th>Age</th>
-                <th>Year</th>
                 <th title="Interpolated annual return this year">Return</th>
                 <th title="After-tax income for this plan year">
                   Income (₹ Cr)
@@ -585,13 +584,12 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {rows.map((r) => (
                 <tr
                   key={r.age}
                   className={r.oneTimeExpense > 0 ? "row-expense" : undefined}
                 >
                   <td>{r.age}</td>
-                  <td className="mono">+{i}</td>
                   <td className="mono">{pct.format(r.annualReturnRate)}</td>
                   <td className="mono">{formatCroresTable(r.yearlyIncome)}</td>
                   <td className="mono">
